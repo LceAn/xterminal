@@ -1,9 +1,7 @@
-# 临时文件
-*.tmp
-*.stats
-last_update
-output.stats
+# 编译产物
+server_monitor
+server_monitor.exe
 
-# OS 文件
+# OS
 .DS_Store
 Thumbs.db
