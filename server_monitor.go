@@ -482,15 +482,13 @@ func getPorts() []PortService {
 			} else {
 				svcType, process := detectServiceType(name, pid)
 				ps := &PortService{
-					Port: port, Service: name, IP: ip, Proto: "tcp",
+					Port: port, Service: name, Proto: "tcp",
 					Type: svcType, Star: importantPorts[port], Process: process, PID: pid,
 				}
 				if strings.Contains(ip, ":") {
 					ps.IPv6 = ip
-					ps.IPv4 = ""
 				} else {
 					ps.IPv4 = ip
-					ps.IPv6 = ""
 				}
 				portMap[key] = ps
 			}
