@@ -1,219 +1,79 @@
-# XTerminal - Linux 系统状态监控面板
+# XTerminal
 
-[![Go Version](https://img.shields.io/badge/Go-1.18+-00ADD8?style=flat&logo=go)](https://go.dev/)
-[![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Platform](https://img.shields.io/badge/Platform-Linux-yellow.svg)](https://www.linux.org/)
+Linux 系统状态监控面板。项目使用一个 Go 文件和内嵌前端展示 CPU、内存、磁盘、网络、进程、监听端口、服务状态、工具版本及近期系统日志。
 
-轻量级 Linux 系统实时监控 Web 面板，Go 单文件实现，内嵌前端，零依赖部署。
+![界面预览](preview.png)
 
-## ✨ 功能特性
+## 环境要求
 
-### 📊 系统信息
-- CPU 型号、核心数、负载、温度
-- 内存使用率、Swap 状态
-- 磁盘分区信息、总容量统计
-- 系统运行时间
+- Linux `/proc` 和 `/sys` 文件系统
+- 编译时使用 Go 1.22+
+- `ip`、`ss`、`ps`、`systemctl`、`journalctl` 等系统命令；命令缺失时对应字段可能为空
 
-### 🌐 网络监控
-- 网卡状态、IPv4/IPv6 地址
-- 实时流量统计（RX/TX）
-- TCP 连接数、已建立连接、TIME-WAIT
-
-### 📈 进程管理
-- Top 10 CPU 占用进程
-- 显示 PID、用户、CPU%、MEM%、命令
-
-### 🔌 端口服务
-- 监听端口列表
-- 服务类型识别（system/docker/go/python/node/java 等）
-- 重要端口标记（22, 80, 443, 3306, 5432, 6379, 27017）
-- 进程 PID 关联
-
-### 🔧 开发环境
-自动检测以下工具版本：
-- **编译工具**: GCC, Make, CMake
-- **编程语言**: Python, pip, Node.js, npm, Go, Java
-- **数据库**: PostgreSQL, MariaDB, Redis
-- **容器**: Docker, Docker Compose
-- **常用工具**: Git, Vim, tmux, htop, jq, rg, bat, fd
-
-### ⚙️ 服务状态
-- Docker, Nginx, Redis, PostgreSQL, MariaDB, SSH 运行状态
-
-### 📋 系统日志
-- 最近 8 条 journalctl 日志
-- 实时展示服务名、时间、消息
-
-### 🎨 用户界面
-- 🌙/☀️ **昼夜模式切换** - 自动跟随系统，可手动切换
-- 📱 **移动端适配** - 响应式布局，手机也能用
-- ⚡ **实时刷新** - 每 3 秒自动更新数据
-
-## 📸 截图
-
-| 深色模式 | 浅色模式 |
-|:---:|:---:|
-| ![深色模式](preview.png) | ![浅色模式](preview-light.png) |
-
-## 🚀 快速部署
-
-### 编译运行
+## 编译与运行
 
 ```bash
-# 克隆项目
 git clone https://github.com/LceAn/xterminal.git
 cd xterminal
-
-# 编译（需要 Go 1.18+）
-go build -o server_monitor server_monitor.go
-
-# 运行（默认监听 :8080）
-./server_monitor
-
-# 指定端口运行
-./server_monitor --port 9000
+go build -o xterminal .
+./xterminal
 ```
 
-### 访问面板
+默认仅监听 `127.0.0.1:8080`。可显式修改地址：
 
+```bash
+./xterminal --host 0.0.0.0 --port 9000
 ```
-http://your-server:8080
-```
 
-### systemd 服务（推荐）
+开放到非本机地址前，应配置防火墙、反向代理、HTTPS 和访问认证。`GET /api` 会返回进程、端口、服务和系统日志信息，不适合直接暴露在公网。
 
-创建服务文件 `/etc/systemd/system/server-monitor.service`:
+## 接口
+
+| 路径 | 方法 | 说明 |
+| --- | --- | --- |
+| `/` | `GET`, `HEAD` | 监控页面 |
+| `/api` | `GET` | 当前系统状态 JSON，响应禁止缓存 |
+
+未知路径返回 `404`，不支持的方法返回 `405`。HTTP 服务配置了请求头、读写和空闲超时。
+
+## systemd 示例
 
 ```ini
 [Unit]
-Description=Server Monitor Panel
+Description=XTerminal system monitor
 After=network.target
 
 [Service]
 Type=simple
-ExecStart=/path/to/server_monitor
-Restart=always
+ExecStart=/opt/xterminal/xterminal --host 127.0.0.1 --port 8080
+Restart=on-failure
 RestartSec=5
+NoNewPrivileges=true
 
 [Install]
 WantedBy=multi-user.target
 ```
 
-启用服务：
+## 开发验证
 
 ```bash
-sudo systemctl enable server-monitor
-sudo systemctl start server-monitor
+gofmt -w server_monitor.go server_monitor_test.go
+go test ./...
+go vet ./...
 ```
 
-## 🔌 API 接口
+GitHub Actions 会验证监听参数、API 响应、未知路由和方法限制。
 
-| 接口 | 说明 |
-|:---|:---|
-| `GET /` | 监控面板 HTML 页面 |
-| `GET /api` | 系统信息 JSON 接口 |
+## 许可
 
-### JSON 返回示例
-
-```json
-{
-  "cpu": {
-    "model": "AMD EPYC 7002",
-    "cores": 8,
-    "load_avg": "0.15 0.10 0.05",
-    "temp": 45.0
-  },
-  "memory": {
-    "total_mb": 16384,
-    "used_mb": 2048,
-    "percent": 12.5
-  },
-  "disk_total": {
-    "total_gb": 500,
-    "used_gb": 150,
-    "percent": "30%"
-  },
-  "uptime": "15d 8h 32m",
-  "timestamp": "2024-01-15 14:30:00"
-}
-```
-
-## 🛠️ 技术栈
-
-- **后端**: Go (net/http, 纯标准库)
-- **前端**: 原生 HTML + CSS + JavaScript（无框架）
-- **数据源**: `/proc` 文件系统 + systemctl + ss 命令
-- **刷新**: 每 3 秒 AJAX 自动刷新
-
-## 📋 系统要求
-
-- **操作系统**: Linux（推荐 Debian/Ubuntu/CentOS）
-- **Go 版本**: 1.18+（编译需要）
-- **权限**: 读取 `/proc`、执行 `ss`、`systemctl` 命令
-
-## 🔐 安全建议
-
-- 不要在公网直接暴露端口
-- 使用 Nginx 反向代理 + HTTPS
-- 或配合 Tailscale/WireGuard 内网访问
-- 可添加简单认证（Nginx basic auth）
-
-### Nginx 反向代理示例
-
-```nginx
-server {
-    listen 443 ssl;
-    server_name monitor.example.com;
-
-    ssl_certificate /path/to/cert.pem;
-    ssl_certificate_key /path/to/key.pem;
-
-    auth_basic "Monitor";
-    auth_basic_user_file /etc/nginx/.htpasswd;
-
-    location / {
-        proxy_pass http://127.0.0.1:8080;
-        proxy_set_header Host $host;
-    }
-}
-```
-
-## 📝 版本历史
-
-| 版本 | 更新内容 |
-|:---:|:---|
-| v19 | 添加昼夜模式切换、移动端适配、更新 README |
-| v18 | 端口服务类型识别、开发环境检测 |
-| v17 | 网卡状态、流量统计、系统日志 |
-| v16 | 基础系统监控面板 |
-
-## 🤝 贡献
-
-欢迎提交 Issue 和 Pull Request！
-
-## 📄 License
-
-MIT License - 自由使用、修改、分发。
-
----
-
-Made with ❤️ by [LceAn](https://github.com/LceAn)
-
----
-
-## 仓库结构
-
-- `.gitignore`
-- `README.md`
-- `preview.png`
-- `server_monitor.go`
+当前仓库没有 `LICENSE` 文件。README 历史版本曾标注 MIT，但在补充实际许可证文件前，不应据此再分发。
 
 <!-- repo-readme-standard:v1 -->
 ## 仓库维护信息
 
-- 项目类型：产品/工具
-- 当前状态：待复盘
+- 项目类型：Linux 监控工具
+- 当前状态：维护中
 - 可见性：public
-- 维护节奏：每月只选 1-2 个小更新
-- 相关仓库：无已确认的重复仓库关系；如需合并请先核对功能边界。
-- 维护边界：普通文档和代码更新可直接提交；归档、删除、历史重写或强制推送需单独确认。
+- 维护节奏：按月检查 Linux 命令兼容性和信息暴露边界
+- 相关仓库：未发现功能相同、可直接合并的仓库
+- 维护边界：归档、删除、历史重写或强制推送需单独确认

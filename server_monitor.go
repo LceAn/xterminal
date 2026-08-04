@@ -3,8 +3,10 @@ package main
 import (
 	"bufio"
 	"encoding/json"
+	"flag"
 	"fmt"
-	"io/ioutil"
+	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -187,7 +189,7 @@ func getCPU() CPUInfo {
 			cpu.Cores++
 		}
 	}
-	if data, err := ioutil.ReadFile("/sys/class/thermal/thermal_zone0/temp"); err == nil {
+	if data, err := os.ReadFile("/sys/class/thermal/thermal_zone0/temp"); err == nil {
 		tempStr := strings.TrimSpace(string(data))
 		if temp, err := strconv.ParseFloat(tempStr, 64); err == nil {
 			cpu.Temp = temp / 1000.0
@@ -241,7 +243,7 @@ func getSwap() SwapInfo {
 }
 
 func getDisks() ([]DiskInfo, DiskTotal) {
-	mounts, _ := ioutil.ReadFile("/proc/mounts")
+	mounts, _ := os.ReadFile("/proc/mounts")
 	var disks []DiskInfo
 	var totalKB, usedKB int64
 	for _, line := range strings.Split(string(mounts), "\n") {
@@ -296,11 +298,11 @@ func formatSize(bytes uint64) string {
 
 func getNetworks() []NetworkIf {
 	var nets []NetworkIf
-	links, _ := ioutil.ReadDir("/sys/class/net")
+	links, _ := os.ReadDir("/sys/class/net")
 	for _, link := range links {
 		name := link.Name()
 		status := "DOWN"
-		if data, err := ioutil.ReadFile("/sys/class/net/" + name + "/operstate"); err == nil {
+		if data, err := os.ReadFile("/sys/class/net/" + name + "/operstate"); err == nil {
 			status = strings.TrimSpace(string(data))
 			status = strings.ToUpper(status)
 		}
@@ -321,11 +323,11 @@ func getNetworks() []NetworkIf {
 				}
 			}
 		}
-		if rx, _ := ioutil.ReadFile("/sys/class/net/" + name + "/statistics/rx_bytes"); len(rx) > 0 {
+		if rx, _ := os.ReadFile("/sys/class/net/" + name + "/statistics/rx_bytes"); len(rx) > 0 {
 			rxVal, _ := strconv.ParseInt(strings.TrimSpace(string(rx)), 10, 64)
 			rxMB = int(rxVal / 1024 / 1024)
 		}
-		if tx, _ := ioutil.ReadFile("/sys/class/net/" + name + "/statistics/tx_bytes"); len(tx) > 0 {
+		if tx, _ := os.ReadFile("/sys/class/net/" + name + "/statistics/tx_bytes"); len(tx) > 0 {
 			txVal, _ := strconv.ParseInt(strings.TrimSpace(string(tx)), 10, 64)
 			txMB = int(txVal / 1024 / 1024)
 		}
@@ -386,7 +388,7 @@ func getExePath(pid string) string {
 
 func detectServiceType(name string, pid string) (string, string) {
 	cmdlinePath := fmt.Sprintf("/proc/%s/cmdline", pid)
-	cmdline, err := ioutil.ReadFile(cmdlinePath)
+	cmdline, err := os.ReadFile(cmdlinePath)
 	if err != nil {
 		return "other", name
 	}
@@ -503,7 +505,7 @@ func getPorts() []PortService {
 }
 
 func getUptime() string {
-	data, _ := ioutil.ReadFile("/proc/uptime")
+	data, _ := os.ReadFile("/proc/uptime")
 	parts := strings.Fields(string(data))
 	if len(parts) > 0 {
 		secs, _ := strconv.ParseFloat(parts[0], 64)
@@ -934,16 +936,71 @@ u();setInterval(u,3000);
 </body>
 </html>`
 
-func main() {
-	http.HandleFunc("/api", func(w http.ResponseWriter, r *http.Request) {
+func buildListenAddress(host string, port int) (string, error) {
+	if port < 1 || port > 65535 {
+		return "", fmt.Errorf("port must be between 1 and 65535")
+	}
+	if strings.TrimSpace(host) == "" {
+		return "", fmt.Errorf("host must not be empty")
+	}
+	return net.JoinHostPort(host, strconv.Itoa(port)), nil
+}
+
+func newHandler(infoProvider func() SystemInfo) http.Handler {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			w.Header().Set("Allow", http.MethodGet)
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
 		w.Header().Set("Content-Type", "application/json")
-		w.Header().Set("Access-Control-Allow-Origin", "*")
-		json.NewEncoder(w).Encode(getSystemInfo())
+		w.Header().Set("Cache-Control", "no-store")
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		if err := json.NewEncoder(w).Encode(infoProvider()); err != nil {
+			log.Printf("encode system information: %v", err)
+		}
 	})
-	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/" {
+			http.NotFound(w, r)
+			return
+		}
+		if r.Method != http.MethodGet && r.Method != http.MethodHead {
+			w.Header().Set("Allow", "GET, HEAD")
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		w.Write([]byte(html))
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		if r.Method == http.MethodGet {
+			_, _ = w.Write([]byte(html))
+		}
 	})
-	fmt.Println("Server running on :8080")
-	http.ListenAndServe(":8080", nil)
+	return mux
+}
+
+func main() {
+	host := flag.String("host", "127.0.0.1", "listen host")
+	port := flag.Int("port", 8080, "listen port")
+	flag.Parse()
+
+	address, err := buildListenAddress(*host, *port)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	server := &http.Server{
+		Addr:              address,
+		Handler:           newHandler(getSystemInfo),
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       15 * time.Second,
+		WriteTimeout:      30 * time.Second,
+		IdleTimeout:       60 * time.Second,
+	}
+
+	log.Printf("XTerminal listening on http://%s", address)
+	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		log.Fatal(err)
+	}
 }
