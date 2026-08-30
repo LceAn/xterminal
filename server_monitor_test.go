@@ -54,3 +54,46 @@ func TestHandlerRejectsUnknownPathsAndMethods(t *testing.T) {
 		t.Fatalf("unexpected method status: %d", post.Code)
 	}
 }
+
+func TestTokenAuthMiddleware(t *testing.T) {
+	handler := withTokenAuth(newHandler(func() SystemInfo {
+		return SystemInfo{Timestamp: "2026-08-31 10:00:00"}
+	}), "s3cret-token")
+
+	cases := []struct {
+		name   string
+		target string
+		header string
+		want   int
+	}{
+		{"missing token returns 404", "/api", "", http.StatusNotFound},
+		{"wrong token returns 404", "/api?token=nope", "", http.StatusNotFound},
+		{"query token accepted", "/api?token=s3cret-token", "", http.StatusOK},
+		{"bearer token accepted", "/api", "Bearer s3cret-token", http.StatusOK},
+		{"wrong bearer rejected", "/api", "Bearer nope", http.StatusNotFound},
+		{"panel path also protected", "/", "", http.StatusNotFound},
+		{"panel path with token ok", "/?token=s3cret-token", "", http.StatusOK},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			request := httptest.NewRequest(http.MethodGet, tc.target, nil)
+			if tc.header != "" {
+				request.Header.Set("Authorization", tc.header)
+			}
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, request)
+			if response.Code != tc.want {
+				t.Fatalf("unexpected status: got %d, want %d", response.Code, tc.want)
+			}
+		})
+	}
+}
+
+func TestWithoutTokenFlagKeepsOpenAccess(t *testing.T) {
+	handler := newHandler(func() SystemInfo { return SystemInfo{} })
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api", nil))
+	if response.Code != http.StatusOK {
+		t.Fatalf("default behavior changed: got %d, want 200", response.Code)
+	}
+}

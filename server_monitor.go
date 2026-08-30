@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"crypto/subtle"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -603,8 +604,7 @@ func getSystemInfo() SystemInfo {
 }
 
 const html = `<!DOCTYPE html>
-<html lang="zh-CN">
-<head>
+<html lang="zh-CN"><head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Server Monitor</title>
@@ -836,6 +836,12 @@ body{font-family:Inter,-apple-system,sans-serif;background:var(--bg);color:var(-
 </div>
 
 <script>
+// 访问令牌：URL 带 ?token= 时存入 localStorage，后续请求自动附带
+function getToken(){
+ const t=new URLSearchParams(location.search).get('token');
+ if(t){localStorage.setItem('xtoken',t);}
+ return localStorage.getItem('xtoken')||'';
+}
 // 主题切换
 function initTheme(){
  const saved=localStorage.getItem('theme');
@@ -872,7 +878,8 @@ document.getElementById(p).classList.add('on');
 }
 var tc={system:'t sys',docker:'t dk',go:'t go',python:'t py',node:'t no',java:'t jv',php:'t py',ruby:'t no',rust:'t go',other:''};
 function u(){
-fetch('/api').then(r=>r.json()).then(d=>{
+const TK=getToken();
+fetch('/api'+(TK?'?token='+encodeURIComponent(TK):'')).then(r=>{if(!r.ok)throw new Error(r.status);return r.json()}).then(d=>{
 document.getElementById('su').textContent=d.uptime;
 document.getElementById('sc').textContent=d.cpu.load_avg.split(' ')[0];
 document.getElementById('sm').textContent=d.memory.percent.toFixed(0)+'%';
@@ -980,9 +987,34 @@ func newHandler(infoProvider func() SystemInfo) http.Handler {
 	return mux
 }
 
+// withTokenAuth 要求请求携带正确令牌（?token= 或 Authorization: Bearer），
+// 校验失败返回 404，避免暴露本服务的存在。令牌比较使用常数时间算法。
+func withTokenAuth(next http.Handler, token string) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		provided := r.URL.Query().Get("token")
+		if provided == "" {
+			if auth := r.Header.Get("Authorization"); strings.HasPrefix(auth, "Bearer ") {
+				provided = strings.TrimSpace(strings.TrimPrefix(auth, "Bearer "))
+			}
+		}
+		if subtle.ConstantTimeCompare([]byte(provided), []byte(token)) != 1 {
+			log.Printf("rejected request without valid token: %s %s", r.Method, r.URL.Path)
+			http.NotFound(w, r)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func isLoopbackHost(host string) bool {
+	h := strings.TrimSpace(strings.ToLower(host))
+	return h == "127.0.0.1" || h == "localhost" || h == "::1"
+}
+
 func main() {
 	host := flag.String("host", "127.0.0.1", "listen host")
 	port := flag.Int("port", 8080, "listen port")
+	token := flag.String("token", "", "require this access token for all requests (recommended when exposing beyond localhost)")
 	flag.Parse()
 
 	address, err := buildListenAddress(*host, *port)
@@ -990,9 +1022,17 @@ func main() {
 		log.Fatal(err)
 	}
 
+	handler := newHandler(getSystemInfo)
+	if strings.TrimSpace(*token) != "" {
+		handler = withTokenAuth(handler, *token)
+		log.Printf("access token protection enabled")
+	} else if !isLoopbackHost(*host) {
+		log.Printf("WARNING: listening on a non-loopback address without --token; the panel and /api are reachable by anyone who can reach this address")
+	}
+
 	server := &http.Server{
 		Addr:              address,
-		Handler:           newHandler(getSystemInfo),
+		Handler:           handler,
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,
 		WriteTimeout:      30 * time.Second,
