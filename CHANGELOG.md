@@ -2,6 +2,11 @@
 
 本文件记录 XTerminal 的重要变更，格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [未发布] - 2026-08-31
+
+### 安全
+- Go 工具链基线从 1.22 升级到 1.25.13，规避 1.22 系列标准库已知漏洞（GO-2026-6218/6091/6090/6089 涉及 net/url、html/template、crypto/tls、net/http）；README 编译要求同步更新。
+
 ## [未发布] - 2026-08-30
 
 ### 新增
